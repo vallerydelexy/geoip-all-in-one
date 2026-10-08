@@ -107,21 +107,43 @@ latlong loaders return (country, lat, lon, located) tuples, country loaders retu
 """
 
 
-def load_latlong_tsv(filename: str, lat_col: int, long_col: int, ipv6: bool = False) -> RangeTable:
+def load_latlong_tsv(
+    filename: str,
+    lat_col: int,
+    long_col: int,
+    region_col: Optional[int] = None,
+    city_col: Optional[int] = None,
+    ipv6: bool = False,
+) -> RangeTable:
     table = RangeTable()
     if not os.path.exists(filename):
         return table
-    with open(filename) as f:
+    with open(filename, 'r', encoding='utf-8', errors='replace') as f:
         for line in f:
             parts = line.strip().split('\t')
             if len(parts) > max(lat_col, long_col):
                 try:
                     start = hex_to_int(parts[0])
                     end = hex_to_int(parts[1]) + 1
+                    country = parts[2]
                     # the columns between country and lat are place names (region/city).
                     # all empty means a country-level fallback point, not a location
                     located = any(p not in ('', '-') for p in parts[3:lat_col])
-                    table.add(start, end, (parts[2], parts[lat_col], parts[long_col], located))
+
+                    # Only capture detailed state/province and city for Indonesia ('ID')
+                    region = ''
+                    city = ''
+                    if country == 'ID':
+                        if region_col is not None and len(parts) > region_col:
+                            val = parts[region_col].strip()
+                            if val and val != '-':
+                                region = val
+                        if city_col is not None and len(parts) > city_col:
+                            val = parts[city_col].strip()
+                            if val and val != '-':
+                                city = val
+
+                    table.add(start, end, (country, parts[lat_col], parts[long_col], located, region, city))
                 except Exception as e:
                     print(f"Error processing line in {filename}: {e}", file=sys.stderr)
                     pass
@@ -267,13 +289,48 @@ def pick_center_coords(
     return (data[1], data[2], name)
 
 
+def resolve_region_city(
+    all_data: dict, winner_src: Optional[str], coord_priority: list[str]
+) -> tuple[str, str]:
+    """
+    Resolve (region, city) for an Indonesian IP range.
+    Prefers the winning source for consistency with chosen coordinates.
+    Falls back to other coord sources agreeing on 'ID' in coord_priority order if missing.
+    """
+    region = ''
+    city = ''
+
+    # 1. Check winning source if it has Indonesia location data
+    if winner_src and winner_src in all_data:
+        val = all_data[winner_src]
+        if val and isinstance(val, tuple) and len(val) >= 6 and val[0] == 'ID':
+            region = val[4]
+            city = val[5]
+
+    # 2. Fall back to other coord sources agreeing on 'ID' if region or city is missing
+    if not (region and city):
+        for src in coord_priority:
+            if src == winner_src:
+                continue
+            val = all_data.get(src)
+            if val and isinstance(val, tuple) and len(val) >= 6 and val[0] == 'ID':
+                if not region and val[4]:
+                    region = val[4]
+                if not city and val[5]:
+                    city = val[5]
+                if region and city:
+                    break
+
+    return (region, city)
+
+
 def pick_winner(
     all_data: dict, latlong_names: set[str], merge_config: dict
-) -> Optional[tuple[str, str, str, str]]:
+) -> Optional[tuple[str, str, str, str, str, str]]:
     """
     main merge decision for a single IP point.
-    all_data maps source name -> (country, lat, lon) for latlong or country string for country-only.
-    returns (country, lat, lon, debug_label) or None.
+    all_data maps source name -> (country, lat, lon, located, region, city) for latlong or country string for country-only.
+    returns (country, lat, lon, region, city, debug_label) or None.
     """
     # collect countries from all sources that have data
     countries = {}
@@ -321,31 +378,18 @@ def pick_winner(
         located_ll = [(name, data) for name, data in available_ll if name in located]
         tiebreak = merge_config.get('coord_tiebreak')
         lat, lon, src = pick_center_coords(located_ll or available_ll, threshold, tiebreak)
-        return (ll_country_list[0], lat, lon, f'unanimous->{src}')
-
-    # rules that override the country vote if they match
-    # for rule in merge_config.get('overrides', []):
-    #     match_names = rule['match']
-    #     match_countries = []
-    #     all_present = True
-    #     for src_name in match_names:
-    #         if src_name not in countries:
-    #             all_present = False
-    #             break
-    #         match_countries.append(countries[src_name])
-
-    #     if not all_present or len(set(match_countries)) != 1:
-    #         continue
-
-    #     matched_country = match_countries[0]
-    #     coords = find_coords(matched_country)
-    #     if coords:
-    #         lat, lon, src = coords
-    #         return (matched_country, lat, lon, '+'.join(match_names) + f'->{src}')
+        winner_country = ll_country_list[0]
+        region, city = (
+            resolve_region_city(all_data, src, coord_priority)
+            if winner_country == 'ID'
+            else ('', '')
+        )
+        return (winner_country, lat, lon, region, city, f'unanimous->{src}')
 
     # vote (rank countries by count, break ties using vote_priority)
     if not coord_sources:
-        return (votes.most_common(1)[0][0], '0', '0', 'no_coords')
+        top_cc = votes.most_common(1)[0][0]
+        return (top_cc, '0', '0', '', '', 'no_coords')
 
     vote_priority = merge_config.get('vote_priority', [])
     top = votes.most_common()
@@ -358,17 +402,28 @@ def pick_winner(
                 coords = find_coords(countries[prio_name])
                 if coords:
                     lat, lon, src = coords
-                    return (countries[prio_name], lat, lon, f'vote->{src}')
+                    c = countries[prio_name]
+                    region, city = (
+                        resolve_region_city(all_data, src, coord_priority)
+                        if c == 'ID'
+                        else ('', '')
+                    )
+                    return (c, lat, lon, region, city, f'vote->{src}')
 
     # walk voted countries, use the first one that has matching coords
     for country, _ in top:
         coords = find_coords(country)
         if coords:
             lat, lon, src = coords
-            return (country, lat, lon, f'vote->{src}')
+            region, city = (
+                resolve_region_city(all_data, src, coord_priority)
+                if country == 'ID'
+                else ('', '')
+            )
+            return (country, lat, lon, region, city, f'vote->{src}')
 
     # no coord source matches any voted country
-    return (top[0][0], '0', '0', 'no_match')
+    return (top[0][0], '0', '0', '', '', 'no_match')
 
 
 def main() -> None:
@@ -393,7 +448,7 @@ def main() -> None:
     else:
         merge_config = {}
 
-    # load latlong sources (return (country, lat, lon) tuples)
+    # load latlong sources (return (country, lat, lon, located, region, city) tuples)
     print(f"Loading {ip_version} lat/long sources...", file=sys.stderr)
     latlong_sources: dict[str, RangeTable] = {}
     for name, info in sources.get('latlong', {}).items():
@@ -401,7 +456,16 @@ def main() -> None:
         filepath = os.path.join(data_dir, f"{name}.{ext}")
         lat_col = info.get('lat_col', 5)
         long_col = info.get('long_col', 6)
-        latlong_sources[name] = load_latlong_tsv(filepath, lat_col, long_col, ipv6)
+        region_col = info.get('region_col')
+        city_col = info.get('city_col')
+        # Default heuristics if not explicitly specified
+        if region_col is None:
+            region_col = 3
+        if city_col is None:
+            city_col = 5 if lat_col == 6 else 4
+        latlong_sources[name] = load_latlong_tsv(
+            filepath, lat_col, long_col, region_col, city_col, ipv6
+        )
         print(f"  {name}: {len(latlong_sources[name])} ranges", file=sys.stderr)
 
     # load country-only sources (return country code strings)
@@ -455,13 +519,13 @@ def main() -> None:
 
         result = pick_winner(all_data, latlong_name_set, merge_config)
         if result:
-            country, lat, lon, _ = result
-            output.append((start, end, country, lat, lon))
+            country, lat, lon, region, city, _ = result
+            output.append((start, end, country, lat, lon, region, city))
 
         if idx % 500000 == 0 and idx > 0:
             print(f"  {idx}/{total} segments...", file=sys.stderr)
 
-    # merge adjacent segments with identical country/coords
+    # merge adjacent segments with identical country/coords/region/city
     print("Merging consecutive entries...", file=sys.stderr)
     merged: list[tuple] = []
     for entry in output:
@@ -474,9 +538,12 @@ def main() -> None:
 
     # write final tsv
     print(f"Writing {output_file}...", file=sys.stderr)
-    with open(output_file, 'w') as f:
-        for start, end, country, lat, lon in merged:
-            f.write(f"{int_to_hex(start)}\t{int_to_hex(end)}\t{country}\t{lat}\t{lon}\n")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for start, end, country, lat, lon, region, city in merged:
+            if country == 'ID' and (region or city):
+                f.write(f"{int_to_hex(start)}\t{int_to_hex(end)}\t{country}\t{lat}\t{lon}\t{region}\t{city}\n")
+            else:
+                f.write(f"{int_to_hex(start)}\t{int_to_hex(end)}\t{country}\t{lat}\t{lon}\n")
 
     print(f"Done! {len(merged)} entries written.", file=sys.stderr)
 

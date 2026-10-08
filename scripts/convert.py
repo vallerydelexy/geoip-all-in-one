@@ -3,23 +3,24 @@ Convert merged tsv to mmdb (and adds timezone)
 """
 
 import sys
+from typing import Any
 
 import netaddr
 from mmdb_writer import MMDBWriter
 from tzfpy import get_tz
 
 
-def hex_to_ip(hex_str, ipv6=False):
+def hex_to_ip(hex_str: str, ipv6: bool = False):
     num = int(hex_str, 16)
     if ipv6:
         return netaddr.IPAddress(num, version=6)
     return netaddr.IPAddress(num, version=4)
 
 
-def process_file(input_file, writer, ipv6=False):
+def process_file(input_file: str, writer: MMDBWriter, ipv6: bool = False) -> int:
     count = 0
 
-    with open(input_file, 'r') as f:
+    with open(input_file, 'r', encoding='utf-8', errors='replace') as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -34,6 +35,8 @@ def process_file(input_file, writer, ipv6=False):
             country_code = parts[2]
             latitude = parts[3]
             longitude = parts[4]
+            region = parts[5].strip() if len(parts) > 5 else ''
+            city = parts[6].strip() if len(parts) > 6 else ''
 
             try:
                 start_ip = hex_to_ip(start_hex, ipv6)
@@ -46,10 +49,17 @@ def process_file(input_file, writer, ipv6=False):
                 lon = float(longitude)
                 tz = get_tz(lon, lat)
 
-                data = {
+                data: dict[str, Any] = {
                     'country': {'iso_code': country_code},
                     'location': {'latitude': lat, 'longitude': lon, 'time_zone': tz},
                 }
+
+                # Detailed city and state/province ONLY for Indonesia ('ID')
+                if country_code == 'ID':
+                    if city:
+                        data['city'] = {'names': {'en': city}}
+                    if region:
+                        data['subdivisions'] = [{'names': {'en': region}}]
 
                 writer.insert_network(ip_set, data)
                 count += 1

@@ -91,6 +91,10 @@ def main():
             print(f"  {name}: {status}")
         sys.exit(1)
 
+    marker = os.path.join(output_dir, '.downloaded')
+    with open(marker, 'w') as f:
+        pass
+
     print("\nDownload complete!")
 
 

@@ -1,18 +1,24 @@
 latlong:
   ip2location:
     format: hex_tsv
+    region_col: 3
+    city_col: 4
     lat_col: 5
     long_col: 6
     ipv4: "https://gitlab.com/tdulcet/ip-geolocation-dbs/-/raw/main/ip2location-city/ipv4.tsv?inline=false"
     ipv6: "https://gitlab.com/tdulcet/ip-geolocation-dbs/-/raw/main/ip2location-city/ipv6.tsv?inline=false"
   geolite2:
     format: hex_tsv
+    region_col: 3
+    city_col: 5
     lat_col: 6
     long_col: 7
     ipv4: "https://gitlab.com/tdulcet/ip-geolocation-dbs/-/raw/main/geolite2-city/ipv4-en.tsv?inline=false"
     ipv6: "https://gitlab.com/tdulcet/ip-geolocation-dbs/-/raw/main/geolite2-city/ipv6-en.tsv?inline=false"
   dbip:
     format: hex_tsv
+    region_col: 3
+    city_col: 4
     lat_col: 5
     long_col: 6
     ipv4: "https://gitlab.com/tdulcet/ip-geolocation-dbs/-/raw/main/dbip-city/ipv4.tsv?inline=false"

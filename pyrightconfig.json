@@ -1,0 +1,13 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportMissingTypeStubs": false,
+  "extraPaths": [
+    ".",
+    "scripts",
+    ".agents/scripts",
+    ".venv/Lib/site-packages",
+    "C:/Users/Rizki Aprita/AppData/Roaming/Python/Python313/site-packages",
+    "C:/Python313/Lib/site-packages"
+  ]
+}

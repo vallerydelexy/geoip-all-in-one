@@ -1,8 +1,16 @@
 # GeoIP All in One
 
-This downloads the following sources, merges them with a voting algorithm, and outputs a single mmdb file with country, coordinates, and timezone info.
+This downloads geolocation sources, merges them using a deterministic voting and centroid algorithm, resolves timezones from coordinates, and outputs a compact MaxMind DB (`.mmdb`) file.
 
 Releases are built weekly.
+
+---
+
+### Features & Output Schema
+
+* **Format**: MaxMind DB (`GeoIP2-City` database type).
+* **Global records**: Compact footprint containing `country.iso_code`, `location.latitude`, `location.longitude`, and `location.time_zone`.
+* **Indonesia (`ID`) records**: Granular place details including `city.names.en` and `subdivisions[].names.en` (state/province) alongside coordinates and timezone.
 
 ---
 
@@ -24,21 +32,111 @@ These are additionally used to help vote on which city source to use for a given
 
 ### Timezone data
 
-Calculated from the longitude/latitude using [tzfpy](https://github.com/ringsaturn/tzfpy)
+Calculated from coordinates using [tzfpy](https://github.com/ringsaturn/tzfpy).
 
 ---
 
-## Merge algorithm
+## Quick Start & Pipeline Execution
 
-For each IP range, all 6 sources vote on a country.
+### 1. Environment Setup
 
-The winning country is then used to narrow down city sources which then picks a longitude/latitude in the priority IP2Location > DB-IP > GeoLite2.
+Create and activate a virtual environment (Python 3.10+ recommended, e.g. Python 3.11):
 
-If all 3 city sources agree on the same country, the middle-most/most common coordinate pair is used.
+**Windows (PowerShell):**
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+**Linux / macOS:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ---
 
-This was developed for Camoufox's geolocation finder, so I've left out city names and only included country ISO codes, coordinates, and timezone to keep the file size smaller. I may add more later.
+### 2. Run Entire Pipeline (Automated via Make)
+
+If you have `make` installed:
+
+```bash
+# Build combined geoip.mmdb, geoip_ipv4.mmdb, and geoip_ipv6.mmdb
+make
+
+# Or run individual stages:
+make download    # Stage 1: Download raw datasets to data/
+make merge       # Stage 2: Merge into intermediate TSVs (merged_ipv4.tsv, merged_ipv6.tsv)
+make convert     # Stage 3: Convert TSVs into final .mmdb files
+```
+
+---
+
+### 3. Run Pipeline Manually (Direct CLI / PowerShell)
+
+You can run each stage directly with Python:
+
+#### Step 1: Download Datasets
+```powershell
+python scripts/download.py sources.yaml ipv4 data/ipv4
+python scripts/download.py sources.yaml ipv6 data/ipv6
+```
+
+#### Step 2: Merge & Vote
+Processes IP ranges, runs voting, centroid calculation, and Indonesia city/province resolution:
+```powershell
+python scripts/merge.py sources.yaml ipv4 data/ipv4 merged_ipv4.tsv
+python scripts/merge.py sources.yaml ipv6 data/ipv6 merged_ipv6.tsv
+```
+
+#### Step 3: Convert to MMDB & Compute Timezones
+```powershell
+# Combined database (IPv4 + IPv6)
+python scripts/convert.py merged_ipv4.tsv merged_ipv6.tsv geoip.mmdb
+
+# Or individual versions
+python scripts/convert.py merged_ipv4.tsv geoip_ipv4.mmdb 4
+python scripts/convert.py merged_ipv6.tsv geoip_ipv6.mmdb 6
+```
+
+#### Step 4: Verify Database & Run Tests
+```powershell
+# Inspect and verify IP lookups against the generated MMDB
+python .agents/scripts/verify_mmdb.py geoip.mmdb
+
+# Run pipeline deep tests
+python .agents/scripts/run_pipeline_tests.py
+```
+
+---
+
+### 4. How to Restart / Reset from Scratch
+
+To clean up downloaded caches, intermediate TSVs, and compiled MMDB files so the pipeline downloads and builds fresh:
+
+**Using Make:**
+```bash
+make clean
+make
+```
+
+**Using PowerShell:**
+```powershell
+Remove-Item -Recurse -Force data, *.tsv, *.mmdb -ErrorAction SilentlyContinue
+```
+
+Then re-run Step 1 through Step 3 above.
+
+---
+
+## Merge Algorithm
+
+1. For each IP range, all 6 sources vote on a country code.
+2. The winning country is used to narrow down coordinate sources.
+3. Coordinates are selected via `coord_priority` (`ip2location` > `dbip` > `geolite2`). If all 3 city sources agree on country, a centroid/center point within `coord_spread_threshold` is chosen.
+4. For **Indonesia (`ID`)**, the winning coordinate source provides the detailed city and state/province names, falling back to other agreeing sources if missing. For all other countries, place names are left empty to keep the database size lightweight.
 
 ---
 

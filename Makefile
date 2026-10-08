@@ -1,6 +1,11 @@
 .PHONY: all clean download download-ipv4 download-ipv6 merge convert ipv4 ipv6 deps
 
-PYTHON := python3
+ifeq ($(OS),Windows_NT)
+PYTHON ?= python
+else
+PYTHON ?= python3
+endif
+
 SOURCES := sources.yaml
 
 IPV4_MERGED := merged_ipv4.tsv
@@ -21,15 +26,11 @@ download: download-ipv4 download-ipv6
 download-ipv4: $(IPV4_DONE)
 download-ipv6: $(IPV6_DONE)
 
-$(IPV4_DONE): $(SOURCES)
-	@mkdir -p $(IPV4_DIR)
+$(IPV4_DONE): $(SOURCES) scripts/download.py
 	$(PYTHON) scripts/download.py $(SOURCES) ipv4 $(IPV4_DIR)
-	@touch $@
 
-$(IPV6_DONE): $(SOURCES)
-	@mkdir -p $(IPV6_DIR)
+$(IPV6_DONE): $(SOURCES) scripts/download.py
 	$(PYTHON) scripts/download.py $(SOURCES) ipv6 $(IPV6_DIR)
-	@touch $@
 
 merge: $(IPV4_MERGED) $(IPV6_MERGED)
 
@@ -54,9 +55,7 @@ ipv4: $(IPV4_MMDB)
 ipv6: $(IPV6_MMDB)
 
 clean:
-	rm -rf $(DATA_DIR)
-	rm -f $(IPV4_MERGED) $(IPV6_MERGED)
-	rm -f $(IPV4_MMDB) $(IPV6_MMDB) $(COMBINED_MMDB)
+	$(PYTHON) scripts/clean.py
 
 deps:
-	pip install pyyaml mmdb_writer netaddr tzfpy requests
+	pip install -r requirements.txt
